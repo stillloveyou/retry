@@ -1,6 +1,9 @@
 import streamlit as st
 import openai
 import os
+import pytesseract
+import cv2
+import numpy as np
 from models.appliance_classifier import classify_appliance
 from dotenv import load_dotenv
 from PIL import Image
@@ -17,7 +20,6 @@ from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 
 from config import answer_examples
-
 
 
 ##llm
@@ -154,7 +156,12 @@ st.caption("사진을 업로드하고 전기세 절약 플랜을 받으세요!")
 load_dotenv()
 openai.api_key = os.getenv('')
 
-uploaded_file = st.file_uploader("가전 제품의 사진을 업로드하세요", type=["jpg", "jpeg", "png"])
+# 가전 제품 종류 선택
+appliance_type = st.selectbox("가전 제품 종류를 선택하세요", ["에어컨", "세탁기", "냉장고", "전자레인지", "오븐", "선풍기"])
+
+# 전력 정보 사진 업로드
+uploaded_file = st.file_uploader(f"{appliance_type}의 전력 정보 사진을 업로드하세요", type=["jpg", "jpeg", "png"])
+
 
 if uploaded_file is not None:
     img = Image.open(uploaded_file)
@@ -164,15 +171,25 @@ if uploaded_file is not None:
     image_path = os.path.join("uploaded_image." + uploaded_file.name.split(".")[-1])
     img.save(image_path)
 
-    with st.spinner("이미지 인식 중..."):
-        appliance = classify_appliance(image_path)
-        st.write(f"인식된 가전 제품: {appliance}")
+    with st.spinner("이미지에서 전력 정보 추출 중..."):
+        # 이미지를 numpy 배열로 변환
+        img_cv = cv2.imread(image_path)
+        # 이미지를 회색조로 변환
+        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        # 이미지를 이진화
+        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+        # 이미지를 확대하여 인식률 증가
+        resized = cv2.resize(thresh, None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
 
-    power_consumption = st.number_input("소비전력 (W)를 입력하세요", min_value=0)
+        # 전처리된 이미지로 텍스트 추출
+        text = pytesseract.image_to_string(resized, lang='kor+eng')
+        st.write(f"추출된 전력 정보: {text}")
+
+    power_consumption = st.number_input("소비전력 (W)를 입력하세요", min_value=0, step=10)
 
     if st.button("전기세 절약 플랜 생성"):
         with st.spinner("플랜 생성 중..."):
-            prompt = f"다음 가전 제품의 소비전력 정보를 바탕으로 한달 전기세 절약 플랜을 작성해 주세요: {appliance}, 소비전력: {power_consumption}W"
+            prompt = f"다음 {appliance_type}의 소비전력 정보를 바탕으로 한달 전기세 절약 플랜을 작성해 주세요: 소비전력: {power_consumption}W"
             response = openai.ChatCompletion.create(
                 model="gpt-4",
                 messages=[
